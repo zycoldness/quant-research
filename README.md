@@ -21,6 +21,7 @@
     README.md
   manifests/
     core_models.csv
+  TODO.md
   notebooks/
     中证800_V4数据重建模块.ipynb
     中证800月调仓候选模型导出.ipynb
@@ -42,7 +43,8 @@
 - `中证800月调仓候选模型导出_2019_20251231新版训练.ipynb` 是新增的新版训练截止 notebook，用于把 V4 全部候选模型批量保存为 `2025-12-31` 训练截止版本。
 - `research_scripts/` 是 notebook 对应导出的 `.py` 脚本，方便查代码和复现。
 - `backtests/` 是 JoinQuant 回测脚本。除模型文件名和 V5.4 topN 配置外，保留既有回测逻辑。
-- `models/` 只放模型文件说明。当前本地没有搜到三个 pkl，所以没有复制 pkl；请在 JoinQuant 回测时把对应 pkl 上传到策略文件同目录。
+- `models/` 放模型文件和说明。JoinQuant 回测时需要把对应 pkl 上传到策略文件同目录，或确保 `read_file(g.model_file)` 能读取到该 pkl。
+- `TODO.md` 记录后续股票池、特征、label、模型、组合、交易成本、风控和工程化方向。
 
 ## 数据构成
 
