@@ -39,6 +39,6 @@ For example, the main sleeve bundle combines:
 
 The model bundles are walk-forward exports with 16 model dates for the 2025-01 to 2026-04 evaluation window.
 
-These files were archived from:
+These files were archived from the user-provided `csi800_ml_mainline_family_v3_outputs.zip`.
 
-`/Users/youzou/Downloads/csi800_ml_mainline_family_v3_outputs.zip`
+In `model_csi800_lgb_v3_walkforward_manifest.csv`, the `path` column is repository-relative from this experiment folder, for example `outputs/model_csi800_lgb_v3_baseline_top10_walkforward.pkl`.
