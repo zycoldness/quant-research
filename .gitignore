@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Large/generated research artifacts. Keep notebooks, scripts, manifests, and
+# compact reports in git; keep model binaries and raw score panels out.
+机器学习策略/models/*.pkl
+机器学习策略/**/*_outputs/
+机器学习策略/**/__pycache__/
+

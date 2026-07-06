@@ -7,145 +7,66 @@ import pandas as pd
 import pickle
 
 
-LEGACY_PRICE_FEATURE_COLS = [
-    "px_ret_5",
-    "px_ret_20",
-    "px_ret_60",
-    "px_ret_120",
-    "px_close_to_ma20",
+# Clean V46 executor.
+# The model bundle's base_feature_cols is the only source of truth.
+# JQ-native factors are fetched by get_factor_values; only the columns below
+# are computed by this script.
+MODEL_FILE = "model_candidate_v46_lgb_direct_hybrid_l2_ff10_2019_2025q1_legacy_unsealed.pkl"
+
+SUPPORTED_PRICE_FEATURE_COLS = [
     "px_close_to_ma60",
-    "px_ma20_to_ma60",
-    "px_volatility_20",
-    "px_volatility_60",
     "px_drawdown_60",
-    "px_drawdown_120",
-    "px_money_mean_20",
-    "px_money_mean_60",
-    "px_money_ratio_20_60",
-    "px_volume_ratio_20_60",
-    "px_amplitude_20",
-    "px_amplitude_60",
-    "px_skew_20",
-    "px_kurt_20",
-]
-
-V4_ONLY_PRICE_FEATURE_COLS = [
-    "px_drawdown_20",
-    "px_up_day_ratio_20",
-    "px_new_high_distance_60",
-    "px_new_low_distance_60",
-    "liq_money_mean_20",
-    "liq_money_mean_60",
     "liq_money_ratio_20_60",
-    "liq_volume_mean_20",
-    "liq_volume_ratio_20_60",
-    "liq_amplitude_mean_20",
-    "liq_amplitude_mean_60",
     "liq_paused_count_20",
-    "liq_paused_count_60",
-    "liq_low_money_days_20",
-    "liq_limit_up_count_20",
-    "liq_limit_down_count_20",
-    "liq_one_price_limit_count_20",
 ]
 
-PRICE_FEATURE_COLS = LEGACY_PRICE_FEATURE_COLS + V4_ONLY_PRICE_FEATURE_COLS
-
-TEMPORAL_FEATURE_COLS = [
+SUPPORTED_TEMPORAL_FEATURE_COLS = [
     "ts_cash_flow_to_price_ratio_rank_mean_3m",
     "ts_Rank1M_rank_chg_1m",
 ]
 
-INDUSTRY_RELATIVE_SOURCE_FACTORS = [
-    "book_to_price_ratio",
-    "earnings_yield",
-    "cash_flow_to_price_ratio",
-    "roe_ttm",
-    "roa_ttm",
-    "Rank1M",
-    "sharpe_ratio_60",
-]
+SELF_BUILT_FEATURE_COLS = SUPPORTED_PRICE_FEATURE_COLS + SUPPORTED_TEMPORAL_FEATURE_COLS
 
-INDUSTRY_RELATIVE_FEATURE_COLS = []
-for _fac in INDUSTRY_RELATIVE_SOURCE_FACTORS:
-    INDUSTRY_RELATIVE_FEATURE_COLS.append("v45_{}_minus_industry_median".format(_fac))
-    INDUSTRY_RELATIVE_FEATURE_COLS.append("v45_{}_rank_in_industry".format(_fac))
+UNIVERSE_INDEX = "000906.XSHG"
+STOCK_NUM_OVERRIDE = None
+CANDIDATE_POOL_SIZE_OVERRIDE = None
+MIN_LISTING_DAYS = 180
+INDUSTRY_CAP_RATIO_DEFAULT = 0.20
+KCB_PROTECT_PCT = 0.02
 
 
 def initialize(context):
-    # 改这里即可逐个测试候选模型 pkl。
-    # 核心观察模型 1：V46 legacy_unsealed baseline。
-    # 该模型为上一阶段最强 baseline，训练到 2025Q1，保留 legacy unsealed 标签边界口径。
-    g.model_file = "model_candidate_v46_lgb_direct_hybrid_l2_ff10_2019_2025q1_legacy_unsealed.pkl"
-
+    g.model_file = MODEL_FILE
     bundle = pickle.loads(read_file(g.model_file))
-    if not isinstance(bundle, dict) or bundle.get("objective") != "v210_refit_fixed_iter_overlay":
-        raise ValueError("model bundle should be v210_refit_fixed_iter_overlay")
+    validate_bundle(bundle)
 
-    g.overlay_mode = bundle.get("overlay_mode", "top30_rerank")
-    direct_mode = g.overlay_mode == "direct"
+    g.model = bundle["base_model"]
+    g.feature_cols = unique_keep_order(list(bundle["base_feature_cols"]))
+    g.fill_values = dict(bundle.get("base_fill_values", {}))
 
-    required_keys = [
-        "base_model",
-        "base_feature_cols",
-        "base_fill_values",
-        "overlay_weight",
-    ]
-    if not direct_mode:
-        required_keys.extend([
-            "residual_model",
-            "residual_feature_cols",
-            "residual_fill_values",
-        ])
-    for key in required_keys:
-        if key not in bundle:
-            raise ValueError("model bundle missing key: {}".format(key))
-
-    g.base_model = bundle["base_model"]
-    g.base_feature_cols = list(bundle["base_feature_cols"])
-    g.base_fill_values = dict(bundle.get("base_fill_values", {}))
-    g.residual_model = bundle.get("residual_model", None)
-    g.residual_feature_cols = list(bundle["residual_feature_cols"])
-    g.residual_fill_values = dict(bundle.get("residual_fill_values", {}))
-
-    g.overlay_weight = float(bundle.get("overlay_weight", 0.15))
-    g.top_n_candidates = int(bundle.get("top_n_candidates", 30))
-
-    g.feature_cols = unique_keep_order(g.base_feature_cols + g.residual_feature_cols)
-    g.price_feature_cols = [col for col in g.feature_cols if col in PRICE_FEATURE_COLS]
-    g.temporal_feature_cols = [col for col in g.feature_cols if col in TEMPORAL_FEATURE_COLS]
-    g.industry_relative_feature_cols = [col for col in g.feature_cols if col in INDUSTRY_RELATIVE_FEATURE_COLS]
-    g.industry_relative_source_cols = get_industry_relative_source_cols(g.industry_relative_feature_cols)
+    g.price_feature_cols = [c for c in g.feature_cols if c in SUPPORTED_PRICE_FEATURE_COLS]
+    g.temporal_feature_cols = [c for c in g.feature_cols if c in SUPPORTED_TEMPORAL_FEATURE_COLS]
     g.jq_factor_cols = [
-        col for col in g.feature_cols
-        if (
-            col not in PRICE_FEATURE_COLS
-            and col not in TEMPORAL_FEATURE_COLS
-            and col not in INDUSTRY_RELATIVE_FEATURE_COLS
-        )
+        c for c in g.feature_cols
+        if c not in SUPPORTED_PRICE_FEATURE_COLS
+        and c not in SUPPORTED_TEMPORAL_FEATURE_COLS
     ]
-    g.jq_factor_cols = unique_keep_order(g.jq_factor_cols + g.industry_relative_source_cols)
 
-    has_v4_only_cols = any(col in V4_ONLY_PRICE_FEATURE_COLS for col in g.price_feature_cols)
-    has_temporal_cols = len(g.temporal_feature_cols) > 0
-    has_industry_relative_cols = len(g.industry_relative_feature_cols) > 0
-    g.requires_v4_feature_adapter = (
-        bool(bundle.get("requires_v4_feature_adapter", False))
-        or has_v4_only_cols
-        or has_temporal_cols
-        or has_industry_relative_cols
-    )
+    check_unsupported_self_built_features(g.feature_cols)
 
-    g.universe_index = "000906.XSHG"
-    g.benchmark = bundle.get("benchmark", "000906.XSHG")
+    g.universe_index = UNIVERSE_INDEX
+    g.benchmark = bundle.get("benchmark", UNIVERSE_INDEX)
     g.stock_num = int(bundle.get("stock_num", 10))
-    g.min_listing_days = 180
-    g.industry_cap_ratio = float(bundle.get("industry_cap_ratio", 0.20))
-    g.kcb_protect_pct = 0.02
-    g.stop_loss_pct = None
-    g.take_profit_pct = None
-    # 纯月调基准：默认不做盘中开板卖出，避免把交易规则变化混入模型比较。
-    g.enable_limit_up_sell = False
+    if STOCK_NUM_OVERRIDE is not None:
+        g.stock_num = int(STOCK_NUM_OVERRIDE)
+
+    g.candidate_pool_size = int(bundle.get("top_n_candidates", 30))
+    if CANDIDATE_POOL_SIZE_OVERRIDE is not None:
+        g.candidate_pool_size = int(CANDIDATE_POOL_SIZE_OVERRIDE)
+
+    g.min_listing_days = MIN_LISTING_DAYS
+    g.industry_cap_ratio = float(bundle.get("industry_cap_ratio", INDUSTRY_CAP_RATIO_DEFAULT))
+    g.kcb_protect_pct = KCB_PROTECT_PCT
 
     g.hold_list = []
     g.yesterday_HL_list = []
@@ -166,29 +87,49 @@ def initialize(context):
     ), type="stock")
     log.set_level("order", "error")
 
-    model_version = bundle.get("research_version", "v210_refit_fixed_iter_overlay")
-    price_mode = "v4_fill_paused" if g.requires_v4_feature_adapter else "legacy_skip_paused"
     log.info(
-        "loaded candidate pure-monthly model %s: base_features=%s residual_features=%s "
-        "weight=%.2f mode=%s candidates=%s limit_up_sell=%s feature_adapter=%s price_mode=%s" % (
-            model_version,
-            len(g.base_feature_cols),
-            len(g.residual_feature_cols),
-            g.overlay_weight,
-            g.overlay_mode,
-            g.top_n_candidates,
-            g.enable_limit_up_sell,
-            g.requires_v4_feature_adapter,
-            price_mode,
+        "loaded clean V46 model file=%s features=%s jq=%s price=%s temporal=%s "
+        "stock_num=%s candidates=%s" % (
+            g.model_file,
+            len(g.feature_cols),
+            len(g.jq_factor_cols),
+            len(g.price_feature_cols),
+            len(g.temporal_feature_cols),
+            g.stock_num,
+            g.candidate_pool_size,
         )
     )
+    log.info("feature cols: %s" % ",".join(g.feature_cols))
 
     run_daily(prepare_stock_list, "9:05")
     run_monthly(monthly_sell, 1, "9:40")
     run_monthly(monthly_buy, 1, "9:50")
-    if g.enable_limit_up_sell:
-        run_daily(check_limit_up, "14:00")
-    run_daily(check_stop_rules, "14:20")
+
+
+def validate_bundle(bundle):
+    if not isinstance(bundle, dict):
+        raise ValueError("model bundle should be dict")
+    for key in ["base_model", "base_feature_cols", "base_fill_values"]:
+        if key not in bundle:
+            raise ValueError("model bundle missing key: %s" % key)
+    if len(bundle.get("base_feature_cols", [])) == 0:
+        raise ValueError("model bundle base_feature_cols is empty")
+    overlay_mode = bundle.get("overlay_mode", "direct")
+    if overlay_mode not in ["direct", None]:
+        raise ValueError("clean V46 executor only supports direct base_model bundles, got: %s" % overlay_mode)
+
+
+def check_unsupported_self_built_features(feature_cols):
+    unsupported = []
+    for col in feature_cols:
+        if col.startswith("px_") or col.startswith("liq_") or col.startswith("ts_"):
+            if col not in SELF_BUILT_FEATURE_COLS:
+                unsupported.append(col)
+    if len(unsupported) > 0:
+        raise ValueError(
+            "unsupported self-built features: %s. Add a small explicit adapter before testing this model." %
+            ",".join(unsupported)
+        )
 
 
 def unique_keep_order(cols):
@@ -201,51 +142,9 @@ def unique_keep_order(cols):
     return out
 
 
-def get_industry_relative_source_cols(feature_cols):
-    out = []
-    for col in feature_cols:
-        for fac in INDUSTRY_RELATIVE_SOURCE_FACTORS:
-            if col in [
-                "v45_{}_minus_industry_median".format(fac),
-                "v45_{}_rank_in_industry".format(fac),
-            ]:
-                out.append(fac)
-    return unique_keep_order(out)
-
-
 def chunks(seq, size):
     for i in range(0, len(seq), size):
         yield seq[i:i + size]
-
-
-def fetch_jq_factor_data(stock_list, factor_cols, date):
-    out = pd.DataFrame(index=stock_list)
-    if len(stock_list) == 0 or len(factor_cols) == 0:
-        return out
-
-    for factor_chunk in chunks(factor_cols, 20):
-        try:
-            factor_data = get_factor_values(stock_list, factor_chunk, end_date=date, count=1)
-        except Exception as err:
-            log.warn("factor chunk fetch failed: %s, err=%s" % (",".join(factor_chunk), err))
-            factor_data = None
-
-        for factor in factor_chunk:
-            try:
-                if factor_data is not None and factor in factor_data:
-                    one_factor = factor_data[factor].iloc[0, :]
-                    out[factor] = one_factor.reindex(stock_list)
-                else:
-                    one = get_factor_values(stock_list, [factor], end_date=date, count=1)
-                    if one is None or factor not in one:
-                        out[factor] = np.nan
-                        continue
-                    out[factor] = one[factor].iloc[0, :].reindex(stock_list)
-            except Exception as err:
-                log.warn("factor fetch failed: %s, err=%s" % (factor, err))
-                out[factor] = np.nan
-
-    return out.reindex(index=stock_list, columns=factor_cols)
 
 
 def prepare_stock_list(context):
@@ -291,40 +190,28 @@ def get_stock_list(context):
     if len(stock_list) == 0:
         return []
 
-    df_factor = pd.DataFrame(index=stock_list)
+    factor_df = pd.DataFrame(index=stock_list)
     if len(g.jq_factor_cols) > 0:
-        df_factor = df_factor.join(fetch_jq_factor_data(stock_list, g.jq_factor_cols, yesterday), how="left")
+        factor_df = factor_df.join(fetch_jq_factor_data(stock_list, g.jq_factor_cols, yesterday), how="left")
 
     if len(g.price_feature_cols) > 0:
-        price_feature_df = get_price_feature_data(stock_list, yesterday)
-        df_factor = df_factor.join(price_feature_df[g.price_feature_cols], how="left")
+        price_df = get_price_feature_data(stock_list, yesterday, g.price_feature_cols)
+        factor_df = factor_df.join(price_df[g.price_feature_cols], how="left")
 
     if len(g.temporal_feature_cols) > 0:
-        temporal_feature_df = get_temporal_feature_data(stock_list, yesterday)
-        df_factor = df_factor.join(temporal_feature_df[g.temporal_feature_cols], how="left")
+        temporal_df = get_temporal_feature_data(stock_list, yesterday, g.temporal_feature_cols)
+        factor_df = factor_df.join(temporal_df[g.temporal_feature_cols], how="left")
 
-    if len(g.industry_relative_feature_cols) > 0:
-        industry_map_full = get_industry_bucket_map(stock_list, yesterday)
-        industry_relative_df = get_industry_relative_feature_data(
-            df_factor,
-            industry_map_full,
-            g.industry_relative_feature_cols
-        )
-        df_factor = df_factor.join(industry_relative_df[g.industry_relative_feature_cols], how="left")
-
-    if df_factor.empty:
+    if factor_df.empty:
         return []
 
-    df_factor = add_model_scores(df_factor)
-    if g.overlay_mode in ["top30_rerank", "direct"]:
-        candidate_count = min(g.top_n_candidates, len(df_factor))
-        candidate_df = df_factor.nlargest(candidate_count, "base_score_z")
-        sorted_stocks = candidate_df.sort_values("final_score", ascending=False).index.tolist()
-        industry_map = get_industry_bucket_map(sorted_stocks, yesterday)
-    else:
-        sorted_stocks = df_factor.sort_values("final_score", ascending=False).index.tolist()
-        industry_map = get_industry_bucket_map(sorted_stocks, yesterday)
+    score_df = add_model_scores(factor_df)
+    score_df = score_df.sort_values("score", ascending=False)
+    if g.candidate_pool_size > 0:
+        score_df = score_df.head(min(g.candidate_pool_size, len(score_df)))
 
+    sorted_stocks = score_df.index.tolist()
+    industry_map = get_industry_bucket_map(sorted_stocks, yesterday)
     target_list = build_industry_neutral_targets(
         sorted_stocks=sorted_stocks,
         industry_map=industry_map,
@@ -332,126 +219,43 @@ def get_stock_list(context):
         max_per_industry=max(1, int(np.floor(g.stock_num * g.industry_cap_ratio)))
     )
 
-    log.info("V2.10 weight=%.2f mode=%s candidates=%s" % (g.overlay_weight, g.overlay_mode, g.top_n_candidates))
-    log.info("target list: {}".format(",".join(target_list)))
+    log.info("target list: %s" % ",".join(target_list))
     log_industry_distribution(target_list, industry_map)
     return target_list
 
 
-def add_model_scores(df_factor):
-    out = df_factor.copy()
-
-    base_X = out.reindex(columns=g.base_feature_cols).replace([np.inf, -np.inf], np.nan)
-    base_X = base_X.fillna(pd.Series(g.base_fill_values)).fillna(0)
-    out["base_score"] = np.asarray(g.base_model.predict(base_X[g.base_feature_cols])).reshape(-1)
-    out["base_score_z"] = zscore_series(out["base_score"])
-
-    residual_X = out.reindex(columns=g.residual_feature_cols).replace([np.inf, -np.inf], np.nan)
-    if g.overlay_mode == "direct" or g.residual_model is None or len(g.residual_feature_cols) == 0:
-        out["residual_score"] = 0.0
-        out["residual_score_z"] = 0.0
-        out["final_score"] = out["base_score_z"]
-    else:
-        residual_X = residual_X.fillna(pd.Series(g.residual_fill_values)).fillna(0)
-        out["residual_score"] = np.asarray(g.residual_model.predict(residual_X[g.residual_feature_cols])).reshape(-1)
-        out["residual_score_z"] = zscore_series(out["residual_score"])
-        out["final_score"] = out["base_score_z"] + g.overlay_weight * out["residual_score_z"]
-    return out
-
-
-def zscore_series(s):
-    s = pd.Series(s).astype(float)
-    std = s.std()
-    if pd.isnull(std) or std <= 0:
-        return s * 0.0
-    return (s - s.mean()) / std
-
-
-def calc_ret(close_mat, days):
-    if close_mat is None or close_mat.empty or len(close_mat) <= days:
-        return pd.Series(dtype=float)
-    return close_mat.iloc[-1] / close_mat.iloc[-days - 1] - 1
-
-
-def calc_up_day_ratio(ret_mat, days):
-    if ret_mat is None or ret_mat.empty:
-        return pd.Series(dtype=float)
-    return (ret_mat.tail(days) > 0).mean()
-
-
-def calc_new_low_distance(close_mat, days):
-    if close_mat is None or close_mat.empty:
-        return pd.Series(dtype=float)
-    last_close = close_mat.iloc[-1]
-    min_close = close_mat.tail(days).min()
-    return last_close / min_close - 1
-
-
-def get_price_feature_data(stock_list, date):
-    if g.requires_v4_feature_adapter:
-        return get_v4_price_feature_data(stock_list, date)
-    return get_legacy_price_feature_data(stock_list, date)
-
-
-def get_legacy_price_feature_data(stock_list, date):
-    out = pd.DataFrame(index=stock_list, columns=PRICE_FEATURE_COLS, dtype=float)
-    if len(stock_list) == 0:
+def fetch_jq_factor_data(stock_list, factor_cols, date):
+    out = pd.DataFrame(index=stock_list)
+    if len(stock_list) == 0 or len(factor_cols) == 0:
         return out
 
-    price_df = get_price(
-        stock_list,
-        end_date=date,
-        frequency="daily",
-        fields=["close", "high", "low", "volume", "money"],
-        count=121,
-        skip_paused=True,
-        fq="pre",
-        panel=False
-    )
-    if price_df is None or price_df.empty:
-        return out
+    for factor_chunk in chunks(factor_cols, 20):
+        try:
+            factor_data = get_factor_values(stock_list, factor_chunk, end_date=date, count=1)
+        except Exception as err:
+            log.warn("factor chunk fetch failed: %s, err=%s" % (",".join(factor_chunk), err))
+            factor_data = None
 
-    price_df["time"] = pd.to_datetime(price_df["time"]).dt.normalize()
-    close_mat = price_df.pivot_table(index="time", columns="code", values="close").sort_index()
-    high_mat = price_df.pivot_table(index="time", columns="code", values="high").sort_index()
-    low_mat = price_df.pivot_table(index="time", columns="code", values="low").sort_index()
-    volume_mat = price_df.pivot_table(index="time", columns="code", values="volume").sort_index()
-    money_mat = price_df.pivot_table(index="time", columns="code", values="money").sort_index()
-    if close_mat.empty:
-        return out
+        for factor in factor_chunk:
+            try:
+                if factor_data is not None and factor in factor_data:
+                    out[factor] = factor_data[factor].iloc[0, :].reindex(stock_list)
+                else:
+                    one = get_factor_values(stock_list, [factor], end_date=date, count=1)
+                    if one is None or factor not in one:
+                        out[factor] = np.nan
+                    else:
+                        out[factor] = one[factor].iloc[0, :].reindex(stock_list)
+            except Exception as err:
+                log.warn("factor fetch failed: %s, err=%s" % (factor, err))
+                out[factor] = np.nan
 
-    ret_mat = close_mat.pct_change()
-    last_close = close_mat.iloc[-1]
-    ma20 = close_mat.tail(20).mean()
-    ma60 = close_mat.tail(60).mean()
-
-    out["px_ret_5"] = calc_ret(close_mat, 5)
-    out["px_ret_20"] = calc_ret(close_mat, 20)
-    out["px_ret_60"] = calc_ret(close_mat, 60)
-    out["px_ret_120"] = calc_ret(close_mat, 120)
-    out["px_close_to_ma20"] = last_close / ma20 - 1
-    out["px_close_to_ma60"] = last_close / ma60 - 1
-    out["px_ma20_to_ma60"] = ma20 / ma60 - 1
-    out["px_volatility_20"] = ret_mat.tail(20).std()
-    out["px_volatility_60"] = ret_mat.tail(60).std()
-    out["px_drawdown_60"] = last_close / close_mat.tail(60).max() - 1
-    out["px_drawdown_120"] = last_close / close_mat.tail(120).max() - 1
-    out["px_money_mean_20"] = money_mat.tail(20).mean()
-    out["px_money_mean_60"] = money_mat.tail(60).mean()
-    out["px_money_ratio_20_60"] = money_mat.tail(20).mean() / money_mat.tail(60).mean() - 1
-    out["px_volume_ratio_20_60"] = volume_mat.tail(20).mean() / volume_mat.tail(60).mean() - 1
-    out["px_amplitude_20"] = (high_mat.tail(20) / low_mat.tail(20) - 1).mean()
-    out["px_amplitude_60"] = (high_mat.tail(60) / low_mat.tail(60) - 1).mean()
-    out["px_skew_20"] = ret_mat.tail(20).skew()
-    out["px_kurt_20"] = ret_mat.tail(20).kurt()
-
-    out = out.replace([np.inf, -np.inf], np.nan)
-    return out.reindex(index=stock_list, columns=PRICE_FEATURE_COLS)
+    return out.reindex(index=stock_list, columns=factor_cols)
 
 
-def get_v4_price_feature_data(stock_list, date, chunk_size=160):
-    out = pd.DataFrame(index=stock_list, columns=PRICE_FEATURE_COLS, dtype=float)
-    if len(stock_list) == 0:
+def get_price_feature_data(stock_list, date, feature_cols, chunk_size=180):
+    out = pd.DataFrame(index=stock_list, columns=feature_cols, dtype=float)
+    if len(stock_list) == 0 or len(feature_cols) == 0:
         return out
 
     for stock_chunk in chunks(stock_list, chunk_size):
@@ -460,96 +264,50 @@ def get_v4_price_feature_data(stock_list, date, chunk_size=160):
                 stock_chunk,
                 end_date=date,
                 frequency="daily",
-                fields=["close", "high", "low", "volume", "money", "paused", "high_limit", "low_limit"],
-                count=121,
+                fields=["close", "money", "paused"],
+                count=61,
                 skip_paused=False,
                 fq="pre",
                 panel=False,
                 fill_paused=True,
             )
         except Exception as err:
-            log.warn("v4 price feature fetch failed, err=%s" % err)
+            log.warn("price feature fetch failed, err=%s" % err)
             price_df = None
         if price_df is None or price_df.empty:
             continue
 
-        for col in ["close", "high", "low", "volume", "money", "paused", "high_limit", "low_limit"]:
+        for col in ["close", "money", "paused"]:
             if col not in price_df.columns:
                 price_df[col] = np.nan
+
         price_df["time"] = pd.to_datetime(price_df["time"]).dt.normalize()
         close_mat = price_df.pivot_table(index="time", columns="code", values="close").sort_index()
-        high_mat = price_df.pivot_table(index="time", columns="code", values="high").sort_index()
-        low_mat = price_df.pivot_table(index="time", columns="code", values="low").sort_index()
-        volume_mat = price_df.pivot_table(index="time", columns="code", values="volume").sort_index()
         money_mat = price_df.pivot_table(index="time", columns="code", values="money").sort_index()
         paused_mat = price_df.pivot_table(index="time", columns="code", values="paused").sort_index()
-        high_limit_mat = price_df.pivot_table(index="time", columns="code", values="high_limit").sort_index()
-        low_limit_mat = price_df.pivot_table(index="time", columns="code", values="low_limit").sort_index()
         if close_mat.empty:
             continue
 
-        ret_mat = close_mat.pct_change()
+        chunk_out = pd.DataFrame(index=stock_chunk, columns=feature_cols, dtype=float)
         last_close = close_mat.iloc[-1]
-        ma20 = close_mat.tail(20).mean()
-        ma60 = close_mat.tail(60).mean()
-        money20 = money_mat.tail(20).mean()
-        money60 = money_mat.tail(60).mean()
-        volume20 = volume_mat.tail(20).mean()
-        volume60 = volume_mat.tail(60).mean()
 
-        chunk_out = pd.DataFrame(index=stock_chunk, columns=PRICE_FEATURE_COLS, dtype=float)
-        chunk_out["px_ret_5"] = calc_ret(close_mat, 5)
-        chunk_out["px_ret_20"] = calc_ret(close_mat, 20)
-        chunk_out["px_ret_60"] = calc_ret(close_mat, 60)
-        chunk_out["px_ret_120"] = calc_ret(close_mat, 120)
-        chunk_out["px_close_to_ma20"] = last_close / ma20 - 1
-        chunk_out["px_close_to_ma60"] = last_close / ma60 - 1
-        chunk_out["px_ma20_to_ma60"] = ma20 / ma60 - 1
-        chunk_out["px_volatility_20"] = ret_mat.tail(20).std()
-        chunk_out["px_volatility_60"] = ret_mat.tail(60).std()
-        chunk_out["px_drawdown_20"] = last_close / close_mat.tail(20).max() - 1
-        chunk_out["px_drawdown_60"] = last_close / close_mat.tail(60).max() - 1
-        chunk_out["px_drawdown_120"] = last_close / close_mat.tail(120).max() - 1
-        chunk_out["px_up_day_ratio_20"] = calc_up_day_ratio(ret_mat, 20)
-        chunk_out["px_new_high_distance_60"] = last_close / close_mat.tail(60).max() - 1
-        chunk_out["px_new_low_distance_60"] = calc_new_low_distance(close_mat, 60)
-        chunk_out["px_skew_20"] = ret_mat.tail(20).skew()
-        chunk_out["px_kurt_20"] = ret_mat.tail(20).kurt()
-
-        chunk_out["px_money_mean_20"] = money20
-        chunk_out["px_money_mean_60"] = money60
-        chunk_out["px_money_ratio_20_60"] = money20 / money60 - 1
-        chunk_out["px_volume_ratio_20_60"] = volume20 / volume60 - 1
-        chunk_out["px_amplitude_20"] = (high_mat.tail(20) / low_mat.tail(20) - 1).mean()
-        chunk_out["px_amplitude_60"] = (high_mat.tail(60) / low_mat.tail(60) - 1).mean()
-
-        chunk_out["liq_money_mean_20"] = money20
-        chunk_out["liq_money_mean_60"] = money60
-        chunk_out["liq_money_ratio_20_60"] = money20 / money60 - 1
-        chunk_out["liq_volume_mean_20"] = volume20
-        chunk_out["liq_volume_ratio_20_60"] = volume20 / volume60 - 1
-        chunk_out["liq_amplitude_mean_20"] = (high_mat.tail(20) / low_mat.tail(20) - 1).mean()
-        chunk_out["liq_amplitude_mean_60"] = (high_mat.tail(60) / low_mat.tail(60) - 1).mean()
-        chunk_out["liq_paused_count_20"] = paused_mat.tail(20).fillna(0).sum()
-        chunk_out["liq_paused_count_60"] = paused_mat.tail(60).fillna(0).sum()
-
-        money_stack = money_mat.stack().dropna()
-        money_q20 = money_stack.quantile(0.20) if len(money_stack) else np.nan
-        chunk_out["liq_low_money_days_20"] = (money_mat.tail(20) < money_q20).sum() if not pd.isnull(money_q20) else np.nan
-        limit_up = close_mat >= (high_limit_mat * 0.999)
-        limit_down = close_mat <= (low_limit_mat * 1.001)
-        one_price = (high_mat <= low_mat * 1.0001) & (limit_up | limit_down)
-        chunk_out["liq_limit_up_count_20"] = limit_up.tail(20).sum()
-        chunk_out["liq_limit_down_count_20"] = limit_down.tail(20).sum()
-        chunk_out["liq_one_price_limit_count_20"] = one_price.tail(20).sum()
+        if "px_close_to_ma60" in feature_cols:
+            ma60 = close_mat.tail(60).mean()
+            chunk_out["px_close_to_ma60"] = last_close / ma60 - 1
+        if "px_drawdown_60" in feature_cols:
+            chunk_out["px_drawdown_60"] = last_close / close_mat.tail(60).max() - 1
+        if "liq_money_ratio_20_60" in feature_cols:
+            money20 = money_mat.tail(20).mean()
+            money60 = money_mat.tail(60).mean()
+            chunk_out["liq_money_ratio_20_60"] = money20 / money60 - 1
+        if "liq_paused_count_20" in feature_cols:
+            chunk_out["liq_paused_count_20"] = paused_mat.tail(20).fillna(0).sum()
 
         out.loc[chunk_out.index, chunk_out.columns] = chunk_out.replace([np.inf, -np.inf], np.nan)
-        del price_df, close_mat, high_mat, low_mat, volume_mat, money_mat, paused_mat
-        del high_limit_mat, low_limit_mat, ret_mat, chunk_out
+        del price_df, close_mat, money_mat, paused_mat, chunk_out
         gc.collect()
 
-    out = out.replace([np.inf, -np.inf], np.nan)
-    return out.reindex(index=stock_list, columns=PRICE_FEATURE_COLS)
+    return out.reindex(index=stock_list, columns=feature_cols)
 
 
 def get_month_end_feature_dates(date, months=5):
@@ -557,7 +315,8 @@ def get_month_end_feature_dates(date, months=5):
     if len(trade_days) == 0:
         return []
     month_last = []
-    for _, gdf in pd.Series(trade_days).groupby(trade_days.strftime("%Y-%m")):
+    trade_day_series = pd.Series(trade_days)
+    for _, gdf in trade_day_series.groupby(trade_day_series.dt.strftime("%Y-%m")):
         month_last.append(gdf.max())
     dates = [d for d in month_last if d <= pd.Timestamp(date)]
     return dates[-months:]
@@ -580,52 +339,45 @@ def get_factor_rank_on_date(stock_list, factor, date):
     return s.rank(pct=True)
 
 
-def get_temporal_feature_data(stock_list, date):
-    out = pd.DataFrame(index=stock_list, columns=TEMPORAL_FEATURE_COLS, dtype=float)
-    if len(stock_list) == 0:
+def get_temporal_feature_data(stock_list, date, feature_cols):
+    out = pd.DataFrame(index=stock_list, columns=feature_cols, dtype=float)
+    if len(stock_list) == 0 or len(feature_cols) == 0:
         return out
 
     feature_dates = get_month_end_feature_dates(date, months=5)
     if len(feature_dates) < 2:
         return out
 
+    need_cf = "ts_cash_flow_to_price_ratio_rank_mean_3m" in feature_cols
+    need_rank1m = "ts_Rank1M_rank_chg_1m" in feature_cols
+
     cf_ranks = []
     rank1m_ranks = []
     for dt in feature_dates:
         dt_str = pd.Timestamp(dt).strftime("%Y-%m-%d")
-        cf_ranks.append(get_factor_rank_on_date(stock_list, "cash_flow_to_price_ratio", dt_str))
-        rank1m_ranks.append(get_factor_rank_on_date(stock_list, "Rank1M", dt_str))
+        if need_cf:
+            cf_ranks.append(get_factor_rank_on_date(stock_list, "cash_flow_to_price_ratio", dt_str))
+        if need_rank1m:
+            rank1m_ranks.append(get_factor_rank_on_date(stock_list, "Rank1M", dt_str))
 
-    if len(cf_ranks) >= 4:
-        out["ts_cash_flow_to_price_ratio_rank_mean_3m"] = pd.concat(cf_ranks[-4:-1], axis=1).mean(axis=1)
-    elif len(cf_ranks) >= 2:
-        out["ts_cash_flow_to_price_ratio_rank_mean_3m"] = pd.concat(cf_ranks[:-1], axis=1).mean(axis=1)
+    if need_cf:
+        if len(cf_ranks) >= 4:
+            out["ts_cash_flow_to_price_ratio_rank_mean_3m"] = pd.concat(cf_ranks[-4:-1], axis=1).mean(axis=1)
+        elif len(cf_ranks) >= 2:
+            out["ts_cash_flow_to_price_ratio_rank_mean_3m"] = pd.concat(cf_ranks[:-1], axis=1).mean(axis=1)
 
-    if len(rank1m_ranks) >= 2:
+    if need_rank1m and len(rank1m_ranks) >= 2:
         out["ts_Rank1M_rank_chg_1m"] = rank1m_ranks[-1] - rank1m_ranks[-2]
 
-    return out.replace([np.inf, -np.inf], np.nan).reindex(index=stock_list, columns=TEMPORAL_FEATURE_COLS)
+    return out.replace([np.inf, -np.inf], np.nan).reindex(index=stock_list, columns=feature_cols)
 
 
-def get_industry_relative_feature_data(factor_df, industry_map, feature_cols):
-    out = pd.DataFrame(index=factor_df.index, columns=feature_cols, dtype=float)
-    if factor_df.empty or len(feature_cols) == 0:
-        return out
-
-    tmp = factor_df.copy()
-    tmp["industry_bucket"] = pd.Series(industry_map).reindex(tmp.index).fillna("UNKNOWN").astype(str)
-
-    for fac in INDUSTRY_RELATIVE_SOURCE_FACTORS:
-        if fac not in tmp.columns:
-            continue
-        median_col = "v45_{}_minus_industry_median".format(fac)
-        rank_col = "v45_{}_rank_in_industry".format(fac)
-        if median_col in feature_cols:
-            out[median_col] = tmp[fac] - tmp.groupby("industry_bucket")[fac].transform("median")
-        if rank_col in feature_cols:
-            out[rank_col] = tmp.groupby("industry_bucket")[fac].transform(lambda s: s.rank(pct=True))
-
-    return out.replace([np.inf, -np.inf], np.nan).reindex(index=factor_df.index, columns=feature_cols)
+def add_model_scores(factor_df):
+    out = factor_df.copy()
+    X = out.reindex(columns=g.feature_cols).replace([np.inf, -np.inf], np.nan)
+    X = X.fillna(pd.Series(g.fill_values)).fillna(0)
+    out["score"] = np.asarray(g.model.predict(X[g.feature_cols])).reshape(-1)
+    return out
 
 
 def get_industry_bucket_map(stock_list, date):
@@ -699,7 +451,7 @@ def log_industry_distribution(target_list, industry_map):
     for stock in target_list:
         industry = industry_map.get(stock, "UNKNOWN")
         dist[industry] = dist.get(industry, 0) + 1
-    log.info("industry distribution: {}".format(dist))
+    log.info("industry distribution: %s" % dist)
 
 
 def monthly_sell(context):
@@ -749,77 +501,6 @@ def monthly_buy(context):
                 break
 
 
-def check_stop_rules(context):
-    if g.stop_loss_pct is None and g.take_profit_pct is None:
-        return
-    if len(g.hold_list) == 0:
-        return
-
-    quote_df = get_price(
-        g.hold_list,
-        end_date=context.current_dt,
-        frequency="1m",
-        fields=["close", "high_limit", "low_limit"],
-        skip_paused=False,
-        fq="pre",
-        count=1,
-        panel=False,
-        fill_paused=True
-    )
-    if quote_df is None or quote_df.empty:
-        return
-
-    latest_map = {}
-    for _, row in quote_df.iterrows():
-        latest_map[row["code"]] = {
-            "close": float(row["close"]),
-            "high_limit": float(row["high_limit"]),
-            "low_limit": float(row["low_limit"])
-        }
-
-    for stock in list(g.hold_list):
-        if stock not in context.portfolio.positions or stock not in latest_map:
-            continue
-        position = context.portfolio.positions[stock]
-        avg_cost = float(position.avg_cost) if position.avg_cost is not None else 0.0
-        if avg_cost <= 0:
-            continue
-        last_price = latest_map[stock]["close"]
-        high_limit = latest_map[stock]["high_limit"]
-        low_limit = latest_map[stock]["low_limit"]
-        pnl_pct = last_price / avg_cost - 1
-        if last_price <= low_limit:
-            continue
-        if (g.stop_loss_pct is not None) and (pnl_pct <= g.stop_loss_pct):
-            close_position(position)
-            continue
-        if (g.take_profit_pct is not None) and (pnl_pct >= g.take_profit_pct) and last_price < high_limit:
-            close_position(position)
-
-
-def check_limit_up(context):
-    if len(g.yesterday_HL_list) == 0:
-        return
-    for stock in g.yesterday_HL_list:
-        if stock not in context.portfolio.positions:
-            continue
-        current_data = get_price(
-            stock,
-            end_date=context.current_dt,
-            frequency="1m",
-            fields=["close", "high_limit"],
-            skip_paused=False,
-            fq="pre",
-            count=1,
-            panel=False,
-            fill_paused=True
-        )
-        if current_data is None or current_data.empty:
-            continue
-        if float(current_data.iloc[0]["close"]) < float(current_data.iloc[0]["high_limit"]):
-            close_position(context.portfolio.positions[stock])
-
-
 def order_target_value_(security, value):
     style = get_order_style(security, value)
     if style is not None:
@@ -844,6 +525,8 @@ def open_position(security, value):
 
 
 def close_position(position):
+    if hasattr(position, "closeable_amount") and position.closeable_amount <= 0:
+        return False
     order = order_target_value_(position.security, 0)
     if order is not None:
         if order.status == OrderStatus.held and order.filled == order.amount:
