@@ -1,6 +1,6 @@
 # CSI800 ML Research Mainline
 
-Last updated: 2026-06-30
+Last updated: 2026-07-13
 
 ## Purpose
 
@@ -58,6 +58,19 @@ The current anchor is:
 - Research-minimal baseline: `fixed_jq_baseline_lgb` from V54.
 
 The anchor is not final. It is the benchmark set that every new experiment must beat or clarify. A new experiment that only beats the research-minimal baseline but loses to v46/v410 should be treated as a diagnostic, not a replacement candidate.
+
+## 2026-07-13 Mainline Update
+
+V83-V89 materially narrowed the research space. The current production-research default is now explicit:
+
+- Keep CSI800, V46 full 43 features, raw `alpha_1m` regression, fixed120, and `feature_fraction=1.0` as the mainline.
+- Robust labels, Huber/L1, rank/LambdaRank, recency weighting, market-state features, and `feature_fraction<1` did not produce stable cross-fold and cross-seed improvement.
+- V86 found a feature-information bottleneck: historical nearest-neighbor labels remain noisy and do not reproduce V46 RankIC. Further tuning on the same information set has low expected value.
+- Liquid All-A 1500 materially improved broad RankIC but did not improve Precision Lift or recent Top8 stability. Treat it as a separate small/mid-cap challenger, not a CSI800 replacement.
+- Broad price, drawdown, liquidity, financial-distress, and model-consensus veto layers failed V89. Do not add them to production. Recent repeated limit-down events may be logged as a `REVIEW` reason, but are not an automatic veto.
+- The next source of model improvement should be genuinely new information, especially expectation revisions, event/announcement data, capital-flow behavior, crowding, and higher-frequency price-volume structure.
+
+Detailed evidence and metric definitions are recorded in `机器学习策略/experiments/weekly_reviews/2026-07-13_csi800_v83_v89_review.md`.
 
 ## Current Evidence
 
