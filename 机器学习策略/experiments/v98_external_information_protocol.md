@@ -30,7 +30,7 @@ V98 只回答一个问题：在 V97 的冻结 Money2 训练协议之外，P1-P4 
 - 三个月 block bootstrap 正增量概率不低于 65%。
 - 相邻截止日分数相关不低于 0.65，Top8 重合不低于 25%。
 - 所有发布日期晚于 `feature_date` 的违规数必须为 0。
-- 若同目录存在 `v96_core_monthly.csv`，V98 Money2 必须逐月精确复现 V96；不一致时直接终止。
+- 若同目录存在 `v96_core_monthly.csv`，V98 Money2 必须逐月复现 V96；RankIC 绝对容差为 `1e-10`，Top8 edge 因 CSV 浮点序列化允许 `1e-7`，超出时直接终止。
 
 ## 解释边界
 
