@@ -1,6 +1,6 @@
 # CSI800 ML Research Mainline
 
-Last updated: 2026-07-13
+Last updated: 2026-07-15
 
 ## Purpose
 
@@ -56,8 +56,34 @@ The current anchor is:
 - Strong practical baseline: GitHub v46 legacy_unsealed direct model.
 - Strong clean baseline: GitHub v410 fixed20 label-safe model.
 - Research-minimal baseline: `fixed_jq_baseline_lgb` from V54.
+- Preferred current deployment candidate: V97 Money2, using the frozen V46 training protocol plus validated money-flow quality and temporal information.
+- Required deployment shadow: V46 full or current Money, because Money2 improves the Top8 tail but has not fully cleared the preregistered adjacent-cutoff stability thresholds.
 
 The anchor is not final. It is the benchmark set that every new experiment must beat or clarify. A new experiment that only beats the research-minimal baseline but loses to v46/v410 should be treated as a diagnostic, not a replacement candidate.
+
+## 2026-07-15 Mainline Update
+
+V90-V98 tested genuinely new information after V83-V89 showed that the existing feature set was the main bottleneck.
+
+- V90 found positive Top8 directions in earnings events and money behavior, but neither was immediately promotable.
+- V91 was not a semantic reproduction of V90. Corrected V92 exactly reproduced V90, then showed that a matched event placebo performed similarly. Event-specific Alpha is therefore not confirmed.
+- V94 confirmed that the first Money feature set improved Top8 metrics versus full V46, while fixed score blends did not add stable value.
+- V96 Money2 produced the strongest current top-tail evidence: versus full V46, Precision Lift improved from about `1.81x` to `2.31x`, MAP@8 from about `0.0171` to `0.0262`, and monthly Top8 edge from about `1.320%` to `2.095%`. RankIC was slightly lower, so this is a top-tail improvement rather than a universal ranking improvement.
+- Money2 improved Top8 edge versus current Money by about `+0.599 percentage points/month`, won across all three seeds, and had about `98.6%` block-bootstrap probability of a positive edge increment. Its adjacent-cutoff score correlation (`0.692`) and Top8 overlap (`28.6%`) were slightly below the preregistered update thresholds, so V46/current Money remains a mandatory shadow.
+- V97 exported the Money2 model. Real JoinQuant backtests were directionally consistent with the offline result: Money2 was stronger than first-generation Money and remained operationally acceptable.
+- Final V98 reproduced the V96 Money2 baseline and found no Top8 improvement from shareholder/unlock, actual-fundamental-reaction, holder-structure, or all-available external feature sets. P2 raised RankIC but lowered Top8 edge, directly confirming that broad cross-sectional ranking and Top8 portfolio quality are not equivalent objectives.
+- V98 also found a year-coverage break in the sparse unlock-ratio fields. Reject the current P2 bundle, but do not generalize that result to a future pure shareholder-change treatment with a clean data contract.
+- True row-level analyst expectation revision remains untested because no source with reliable publication date, forecast horizon, institution/analyst identity, and forecast value has been connected.
+
+Current production-research default:
+
+- CSI800, monthly Top8, board caps, raw `alpha_1m`, LightGBM L2, fixed120, and `feature_fraction=1.0`.
+- Money2 as the preferred deployment candidate.
+- V46 full or current Money as a fixed-cutoff shadow and rollback baseline.
+- No event overlay, broad external-information fusion, hard risk veto, or fixed model-score blend.
+- RankIC is a secondary broad-ranking health metric. Promotion decisions prioritize Precision Lift, MAP/NDCG, Top8 edge, update stability, and real JoinQuant execution.
+
+The consolidated evidence is recorded in `机器学习策略/experiments/weekly_reviews/2026-07-15_csi800_v61_v98_stage_review.md`.
 
 ## 2026-07-13 Mainline Update
 
@@ -87,6 +113,8 @@ Observed so far:
 - Rerank has not yet shown stable improvement over a strong direct model, but remains a valid direction if recall gap diagnostics prove there is room to improve top30-to-top10 ordering.
 - External evidence supports ML plus factor/characteristic return prediction as a viable research direction, especially tree models and neural networks that capture nonlinear interactions. The same evidence also warns that factor returns are cyclical, noisy, and prone to long underperformance periods. A robust system must expect weak years and define monitoring/fallback rules instead of treating every weak year as proof that the model is invalid.
 - V58 showed that a notebook based mainly on label/topN diagnostics can rank models differently from JoinQuant backtests. Future notebooks must include an offline portfolio simulator that approximates the actual deployment path: score top30, portfolio constraints, equal-weight topN, turnover, approximate costs, benchmark excess, drawdown, target list, and a clear report of which JoinQuant tradability filters cannot be reproduced from the CSV.
+- V96/V98 showed that a model can improve broad RankIC while weakening the Top8 portfolio, or improve Top8 while slightly weakening RankIC. RankIC must not be used as the sole promotion metric for a concentrated long-only strategy.
+- Sparse event features must be audited by calendar year, not only by aggregate row coverage. A mostly-zero field can receive high tree gain during the years where it exists and then disappear in later OOS periods, creating hidden source drift.
 
 ## Train-Inference And Evaluation Parity
 
@@ -221,6 +249,35 @@ Bad experiment examples:
 - Use a notebook that cannot rebuild or explicitly load its data.
 - Add a complex ensemble without proving the base learner is strong.
 
+## Exact Replication Gate
+
+This gate is mandatory whenever a notebook uses words such as `reproduction`, `parity`, `confirmation`, or claims that a prior result has been overturned.
+
+1. Freeze the reference artifact before changing anything:
+   - exact input file and required columns;
+   - row keys, date range, row/month counts, and target;
+   - candidate and selected feature lists, order, dtypes, missing-value rules, and coverage;
+   - train/test boundaries, seeds, model parameters, fixed iteration count, and portfolio rule;
+   - reference monthly outputs and acceptance tolerances.
+2. Run the reference implementation first. The notebook must stop before challengers if feature identity, selected features, sample counts, or monthly metrics fail their tolerance.
+3. A feature rebuilt from the same source is a new treatment unless row-level equality against the frozen feature is proved. Similar names, economic meaning, or aggregate coverage do not establish equivalence.
+4. Do not combine replication with source refetching, parser fixes, feature expansion, or portfolio changes. After exact replication passes, change one layer at a time and label each treatment accurately.
+5. Smoke tests must cover semantics as well as execution. In addition to running every cell, assert frozen feature columns, selected features, fold/seed counts, reference metric tolerances, placebo integrity, and portfolio replacement caps.
+6. A failed replication cannot invalidate the prior experiment. It invalidates only the attempted replication until the discrepancy is explained.
+
+## Negative-Control Integrity Gate
+
+Placebo, shuffle, delay, and permutation controls must prove that the intended intervention actually happened before their performance can be interpreted.
+
+1. Record an input-level audit before model fitting: changed row count/rate, grouping coverage, treatment columns, split, fold, and seed.
+2. For within-group permutation controls, prove both sides of the contract: row-to-stock assignment changed, while every group's feature distribution was preserved.
+3. Fail closed when the changed rate is below its preregistered minimum, any row is left outside a group, or the preserved-distribution check fails.
+4. Identical treatment and placebo predictions are an implementation alarm until the input-level audit passes. They are not evidence that the treatment has no value.
+5. Compatibility tests must exercise the production pandas/Python semantics. Date grouping should use integer factor codes or explicit group indices, not comparisons between values returned by version-sensitive datetime conversion APIs.
+
+The detailed V90/V91 incident record is in `机器学习策略/experiments/postmortems/2026-07-14_v90_v91_semantic_replication.md`.
+The V92 placebo incident record is in `机器学习策略/experiments/postmortems/2026-07-14_v92_placebo_integrity.md`.
+
 ## Factor Research Principles
 
 Factor selection should be governed, not opportunistic.
@@ -294,6 +351,7 @@ Before writing a new notebook:
 7. Confirm the result can be judged by monthly OOS outputs, not only aggregate return.
 8. Confirm whether the experiment is trying to beat the GitHub practical anchor, the clean anchor, or only explain a research mechanism.
 9. Confirm that offline model selection uses a JQ-like portfolio simulator, or explicitly mark the notebook as signal-only research.
+10. If this is a replication or confirmation, define machine-checkable identity fields and stop-on-failure tolerances before adding challengers.
 
 ## Post-Experiment Checklist
 
@@ -315,3 +373,7 @@ After reading outputs:
 - 2026-06-16: CSI800 vs CSI500 factor-stability test showed no decisive universe winner at the aggregate factor level. CSI500 had slightly higher mean factor ICIR and lower yearly IC volatility, while CSI800 segment-neutral had better top/bottom spread IR and hit rate. Value and quality factors were at least as stable in CSI800/segment-neutral CSI800, while growth/balance and some technical-volume factors leaned CSI500. Keep CSI800 as the main research universe and treat CSI500 as an attack sleeve or diagnostic sub-universe rather than replacing the mainline.
 - 2026-06-24: The GitHub `zycoldness/quant-research` package should be treated as the current external benchmark set. Its core lines are v46 practical baseline, v410 clean single-model anchor, and v54 recall-rerank attack anchor. Later experiments that did not preserve the V4 hybrid-light feature stack or tested only against JQ-only baselines should not be interpreted as having invalidated the GitHub anchors.
 - 2026-06-30: ETF V6 showed a concrete train/evaluation mismatch: the offline proxy target list mostly matched the JoinQuant `manual_trend_r2 top3` backtest, but the proxy used `feature_date close -> future close` while the backtest traded at the next scheduled 09:35 rebalance. The signal was mostly reproduced, but the performance estimate was not. This lesson now applies to all ML experiments: close-to-close proxy can screen signal direction, but model promotion requires JQ-like execution simulation or real JoinQuant backtest parity.
+- 2026-07-14: V91 mislabeled a reconstructed event treatment as a V90 reproduction. It discarded the frozen V90 `evt_forecast_*` columns, refetched `STK_FIN_FORCAST`, changed parsing/coverage/selected features, and then used the changed monthly path to discuss V90 validity. The code ran correctly, but the experiment answered a different question. A replication now requires the Exact Replication Gate above; failed semantic parity cannot overturn the reference result.
+- 2026-07-14: Corrected V92 exactly reproduced V90 and verified that the event model improved Top8 edge versus V46 by about `+0.635%/month`, but the matched placebo also improved and the real-minus-placebo intervals crossed zero. Event-specific alpha is therefore not confirmed. Keep V90 as a research candidate only; the next test must estimate a preregistered multi-permutation placebo distribution without changing features, model parameters, or portfolio rules.
+- 2026-07-15: V96 Money2 is the strongest current Top8 candidate. It improved monthly Top8 edge by about `+0.599 percentage points` versus current Money and by about `+0.775 percentage points` versus full V46, while increasing Precision Lift and MAP@8. Because adjacent-cutoff stability remained slightly below the preregistered threshold, deploy it only with a fixed-cutoff V46/current Money shadow and explicit update monitoring.
+- 2026-07-15: Final V98 rejected P2/P3/P4 and all-available external-information fusion for Money2 Top8. P2 improved RankIC but lowered Top8 edge; its sparse unlock fields also had a severe year-coverage break and disproportionate feature gain. The current P2 implementation is rejected, while true analyst revision and a clean pure-shareholder-change treatment remain untested.
